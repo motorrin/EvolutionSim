@@ -16,20 +16,30 @@ BG_COLOR = (20, 20, 20)  # Темный фон
 FONT_COLOR = (255, 255, 255)  # Белый текст
 FPS = 60  # Кадров в секунду
 MIN_LIFESPAN = 60 * FPS  # 1 минута (в кадрах)
-MAX_LIFESPAN = 120 * FPS  # 2 минуты (в кадрах)
+MAX_LIFESPAN = 180 * FPS  # 3 минуты (в кадрах)
 
 # Параметры игры
-INITIAL_ANIMALS = 10
-INITIAL_FOOD = 50  # Увеличено начальное количество еды
-FOOD_SPAWN_RATE = 0.35  # Увеличена вероятность появления еды каждый кадр
-MAX_FOOD = 120  # Увеличено максимальное количество еды на карте
-MAX_ANIMALS = 100  # Максимальное количество травоядных установлено на 100
-ENERGY_FROM_FOOD = 30  # Увеличена энергия, получаемая от еды
-ENERGY_COST_BIRTH = 25  # Уменьшена энергия, затрачиваемая на рождение
-ENERGY_COST_MOVE = 0.15  # Увеличена энергия за единицу движения
-ENERGY_COST_EXIST = 0.08  # Увеличена базовая затрата энергии за кадр
-REPRODUCTION_COOLDOWN = 360  # Увеличен перерыв между размножениями (в кадрах)
-MIN_ENERGY_REPRODUCTION = 65  # Увеличена минимальная энергия для размножения
+INITIAL_ANIMALS = 15  # Увеличено начальное количество животных
+INITIAL_FOOD = 60  # Увеличено начальное количество еды
+FOOD_SPAWN_RATE = 0.32  # Сбалансированная вероятность появления еды
+MAX_FOOD = 100  # Оптимизировано максимальное количество еды
+MAX_ANIMALS = 100  # Максимальное количество травоядных
+ENERGY_FROM_FOOD = 35  # Увеличена энергия от еды для баланса с высокой скоростью
+ENERGY_COST_BIRTH = 30  # Увеличена энергия на рождение для баланса популяции
+ENERGY_COST_MOVE = 0.2  # Увеличена энергия за движение (с учетом высокой скорости)
+ENERGY_COST_EXIST = 0.1  # Увеличен базовый расход энергии
+REPRODUCTION_COOLDOWN = 300  # Сбалансирован перерыв между размножениями
+MIN_ENERGY_REPRODUCTION = 70  # Увеличена минимальная энергия для размножения
+
+# Ограничения параметров животных
+MIN_SPEED = 0.8  # Минимальная скорость
+MAX_SPEED = 4.0  # Максимальная скорость (снижена с учетом наблюдений)
+MIN_METABOLISM = 0.4  # Минимальный метаболизм
+MAX_METABOLISM = 1.7  # Максимальный метаболизм
+MIN_VISION = 30  # Минимальное поле зрения
+MAX_VISION = 150  # Максимальное поле зрения
+MIN_FERTILITY = 0.3  # Минимальная плодовитость
+MAX_FERTILITY = 1.2  # Максимальная плодовитость
 
 # Экран
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -51,17 +61,17 @@ class AnimalType(Enum):
 class Genome:
     def __init__(self, speed=None, metabolism=None, vision=None, fertility=None):
         # Если параметры не переданы, генерируем случайные
-        self.speed = speed if speed is not None else random.uniform(0.5, 2.0)
-        self.metabolism = metabolism if metabolism is not None else random.uniform(0.5, 1.5)
-        self.vision = vision if vision is not None else random.uniform(30, 100)
-        self.fertility = fertility if fertility is not None else random.uniform(0.3, 1.0)  # Возврат к исходной фертильности
+        self.speed = speed if speed is not None else random.uniform(MIN_SPEED, 2.0)
+        self.metabolism = metabolism if metabolism is not None else random.uniform(MIN_METABOLISM, 1.5)
+        self.vision = vision if vision is not None else random.uniform(MIN_VISION, 100)
+        self.fertility = fertility if fertility is not None else random.uniform(MIN_FERTILITY, 1.0)
 
     def mutate(self):
-        # Мутация генома с небольшими изменениями
-        self.speed = max(0.3, min(3.0, self.speed * random.uniform(0.8, 1.2)))
-        self.metabolism = max(0.3, min(2.0, self.metabolism * random.uniform(0.8, 1.2)))
-        self.vision = max(20, min(150, self.vision * random.uniform(0.8, 1.2)))
-        self.fertility = max(0.1, min(1.5, self.fertility * random.uniform(0.8, 1.2)))
+        # Мутация генома с небольшими изменениями и ограничениями
+        self.speed = max(MIN_SPEED, min(MAX_SPEED, self.speed * random.uniform(0.8, 1.2)))
+        self.metabolism = max(MIN_METABOLISM, min(MAX_METABOLISM, self.metabolism * random.uniform(0.8, 1.2)))
+        self.vision = max(MIN_VISION, min(MAX_VISION, self.vision * random.uniform(0.8, 1.2)))
+        self.fertility = max(MIN_FERTILITY, min(MAX_FERTILITY, self.fertility * random.uniform(0.8, 1.2)))
 
     @staticmethod
     def combine(genome1, genome2, genome1_chance=0.5, genome2_chance=0.25, mutation_chance=0.25):
@@ -77,7 +87,19 @@ class Genome:
             else:
                 # Мутация - берем среднее значение от родителей и мутируем
                 value = (getattr(genome1, gene) + getattr(genome2, gene)) / 2
-                setattr(new_genome, gene, value * random.uniform(0.8, 1.2))
+                mutated_value = value * random.uniform(0.9, 1.1)  # Уменьшена степень мутации
+                
+                # Применяем ограничения в зависимости от типа гена
+                if gene == 'speed':
+                    mutated_value = max(MIN_SPEED, min(MAX_SPEED, mutated_value))
+                elif gene == 'metabolism':
+                    mutated_value = max(MIN_METABOLISM, min(MAX_METABOLISM, mutated_value))
+                elif gene == 'vision':
+                    mutated_value = max(MIN_VISION, min(MAX_VISION, mutated_value))
+                elif gene == 'fertility':
+                    mutated_value = max(MIN_FERTILITY, min(MAX_FERTILITY, mutated_value))
+                
+                setattr(new_genome, gene, mutated_value)
 
         return new_genome
 
@@ -268,7 +290,9 @@ class Animal:
         self.y += dy * self.genome.speed
 
         # Затрачиваем энергию на движение (зависит от скорости и расстояния)
-        self.energy -= ENERGY_COST_MOVE * self.genome.speed
+        # Квадратичная зависимость потребления энергии от скорости для реалистичности
+        energy_cost = ENERGY_COST_MOVE * (self.genome.speed ** 1.5)
+        self.energy -= energy_cost
 
         # Ограничиваем перемещение границами экрана
         self.x = max(0, min(WIDTH - TILE_SIZE, self.x))
@@ -295,15 +319,17 @@ class Animal:
         elif self.y > HEIGHT - border_avoidance:
             self.direction_angle = random.uniform(math.pi, 2*math.pi)  # Движение вверх
         
-        # Рассчитываем направление движения
-        dx = math.cos(self.direction_angle) * self.genome.speed
-        dy = math.sin(self.direction_angle) * self.genome.speed
+        # Рассчитываем направление движения (с уменьшенной скоростью для случайного движения)
+        actual_speed = self.genome.speed * 0.8
+        dx = math.cos(self.direction_angle) * actual_speed
+        dy = math.sin(self.direction_angle) * actual_speed
         
         self.x += dx
         self.y += dy
         
-        # Затрачиваем энергию на движение
-        self.energy -= ENERGY_COST_MOVE * self.genome.speed * 0.4  # Ещё меньше энергии при плавном движении
+        # Затрачиваем энергию на движение с квадратичной зависимостью от скорости
+        energy_cost = ENERGY_COST_MOVE * (actual_speed ** 1.3) * 0.5  # Меньше энергии при плавном движении
+        self.energy -= energy_cost
         
         # Ограничиваем перемещение границами экрана
         self.x = max(0, min(WIDTH - TILE_SIZE, self.x))
