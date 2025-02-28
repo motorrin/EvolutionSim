@@ -1,0 +1,588 @@
+import pygame
+import random
+import math
+from enum import Enum
+
+# Инициализация pygame
+pygame.init()
+
+# Константы
+WIDTH, HEIGHT = 800, 600
+TILE_SIZE = 10
+FOOD_COLOR = (0, 255, 0)  # Зеленый
+MALE_COLOR = (0, 100, 255)  # Синий
+FEMALE_COLOR = (255, 100, 255)  # Розовый
+BG_COLOR = (20, 20, 20)  # Темный фон
+FONT_COLOR = (255, 255, 255)  # Белый текст
+FPS = 60  # Кадров в секунду
+MIN_LIFESPAN = 60 * FPS  # 1 минута (в кадрах)
+MAX_LIFESPAN = 120 * FPS  # 2 минуты (в кадрах)
+
+# Параметры игры
+INITIAL_ANIMALS = 10
+INITIAL_FOOD = 50  # Увеличено начальное количество еды
+FOOD_SPAWN_RATE = 0.35  # Увеличена вероятность появления еды каждый кадр
+MAX_FOOD = 120  # Увеличено максимальное количество еды на карте
+MAX_ANIMALS = 100  # Максимальное количество травоядных установлено на 100
+ENERGY_FROM_FOOD = 30  # Увеличена энергия, получаемая от еды
+ENERGY_COST_BIRTH = 25  # Уменьшена энергия, затрачиваемая на рождение
+ENERGY_COST_MOVE = 0.15  # Увеличена энергия за единицу движения
+ENERGY_COST_EXIST = 0.08  # Увеличена базовая затрата энергии за кадр
+REPRODUCTION_COOLDOWN = 360  # Увеличен перерыв между размножениями (в кадрах)
+MIN_ENERGY_REPRODUCTION = 65  # Увеличена минимальная энергия для размножения
+
+# Экран
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Эволюция")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont(None, 24)
+
+# Перечисление для пола животных
+class Gender(Enum):
+    MALE = 1
+    FEMALE = 2
+
+# Типы животных
+class AnimalType(Enum):
+    HERBIVORE = 1  # Травоядное
+    PREDATOR = 2   # Хищник
+
+# Класс для генома животного
+class Genome:
+    def __init__(self, speed=None, metabolism=None, vision=None, fertility=None):
+        # Если параметры не переданы, генерируем случайные
+        self.speed = speed if speed is not None else random.uniform(0.5, 2.0)
+        self.metabolism = metabolism if metabolism is not None else random.uniform(0.5, 1.5)
+        self.vision = vision if vision is not None else random.uniform(30, 100)
+        self.fertility = fertility if fertility is not None else random.uniform(0.3, 1.0)  # Возврат к исходной фертильности
+
+    def mutate(self):
+        # Мутация генома с небольшими изменениями
+        self.speed = max(0.3, min(3.0, self.speed * random.uniform(0.8, 1.2)))
+        self.metabolism = max(0.3, min(2.0, self.metabolism * random.uniform(0.8, 1.2)))
+        self.vision = max(20, min(150, self.vision * random.uniform(0.8, 1.2)))
+        self.fertility = max(0.1, min(1.5, self.fertility * random.uniform(0.8, 1.2)))
+
+    @staticmethod
+    def combine(genome1, genome2, genome1_chance=0.5, genome2_chance=0.25, mutation_chance=0.25):
+        new_genome = Genome()
+
+        # Для каждого гена выбираем, от какого родителя он будет унаследован или мутирует
+        for gene in ['speed', 'metabolism', 'vision', 'fertility']:
+            chance = random.random()
+            if chance < genome1_chance:
+                setattr(new_genome, gene, getattr(genome1, gene))
+            elif chance < genome1_chance + genome2_chance:
+                setattr(new_genome, gene, getattr(genome2, gene))
+            else:
+                # Мутация - берем среднее значение от родителей и мутируем
+                value = (getattr(genome1, gene) + getattr(genome2, gene)) / 2
+                setattr(new_genome, gene, value * random.uniform(0.8, 1.2))
+
+        return new_genome
+
+# Класс для животного
+class Animal:
+    def __init__(self, x, y, genome=None, gender=None, age=0, animal_type=None):
+        self.x = x
+        self.y = y
+        self.genome = genome if genome else Genome()
+        self.gender = gender if gender else random.choice([Gender.MALE, Gender.FEMALE])
+        # Теперь всегда создаем травоядное - хищники будут создаваться отдельно
+        self.animal_type = animal_type if animal_type else AnimalType.HERBIVORE
+        self.energy = 100
+        self.age = age
+        self.target_food = None
+        self.target_mate = None
+        self.target_prey = None  # Цель для хищника
+        self.reproduction_cooldown = 0
+        
+        # Определяем цвет в зависимости от типа и пола
+        if self.animal_type == AnimalType.PREDATOR:
+            self.color = (255, 0, 0)  # Красный цвет для хищника
+        else:
+            self.color = MALE_COLOR if self.gender == Gender.MALE else FEMALE_COLOR
+            
+        # Максимальный возраст только для травоядных
+        self.max_age = random.randint(MIN_LIFESPAN, MAX_LIFESPAN) if self.animal_type == AnimalType.HERBIVORE else float('inf')
+
+    def update(self, foods, animals):
+        # Затрата энергии на существование (зависит от метаболизма)
+        self.energy -= ENERGY_COST_EXIST * self.genome.metabolism
+        
+        # Увеличение возраста только для травоядных
+        if self.animal_type == AnimalType.HERBIVORE:
+            self.age += 1
+
+        if self.reproduction_cooldown > 0:
+            self.reproduction_cooldown -= 1
+            
+        # Подсчитываем количество травоядных
+        herbivore_count = sum(1 for a in animals if a.animal_type == AnimalType.HERBIVORE)
+        
+        # Хищник умирает, если травоядных меньше 50
+        if self.animal_type == AnimalType.PREDATOR and herbivore_count < 50:
+            return False
+            
+        # Если энергия закончилась или достигнут максимальный возраст (для травоядных), животное умирает
+        if self.energy <= 0 or (self.animal_type == AnimalType.HERBIVORE and self.age >= self.max_age):
+            return False
+
+        # Логика для хищников
+        if self.animal_type == AnimalType.PREDATOR:
+            # Хищники охотятся на травоядных
+            if not self.target_prey or self.target_prey not in animals or self.target_prey.animal_type != AnimalType.HERBIVORE:
+                self.find_target_prey(animals)
+
+            # Если мы можем размножаться и энергии достаточно, ищем партнера
+            if (self.reproduction_cooldown == 0 and 
+                self.energy > MIN_ENERGY_REPRODUCTION * 1.2 and  # Хищникам нужно больше энергии для размножения
+                not self.target_mate):
+                self.find_target_mate(animals)
+
+            # Если есть цель - жертва, идем к ней
+            if self.target_prey and self.target_prey in animals and self.target_prey.animal_type == AnimalType.HERBIVORE:
+                self.move_towards(self.target_prey.x, self.target_prey.y)
+                # Если достигли жертвы, едим ее
+                if self.distance_to(self.target_prey.x, self.target_prey.y) < TILE_SIZE * 1.5:
+                    # Получаем энергию в зависимости от энергии жертвы
+                    energy_gain = min(ENERGY_FROM_FOOD * 2, self.target_prey.energy * 0.8)
+                    self.energy += energy_gain
+                    animals.remove(self.target_prey)
+                    self.target_prey = None
+            # Логика размножения хищников
+            elif self.target_mate and self.target_mate in animals:
+                self.move_towards(self.target_mate.x, self.target_mate.y)
+                if (self.distance_to(self.target_mate.x, self.target_mate.y) < TILE_SIZE * 2 and
+                    self.gender != self.target_mate.gender and
+                    self.target_mate.reproduction_cooldown == 0 and
+                    self.target_mate.energy > MIN_ENERGY_REPRODUCTION * 1.2 and
+                    self.target_mate.animal_type == AnimalType.PREDATOR):
+                    # Создаем нового хищника
+                    new_animal = self.reproduce_with(self.target_mate, animals)
+                    if new_animal:
+                        animals.append(new_animal)
+                        self.target_mate = None
+            else:
+                # Случайное движение, если нет цели
+                self.move_randomly()
+        # Логика для травоядных
+        else:
+            # Поиск еды, если нет другой цели или цель недоступна
+            if not self.target_food or self.target_food not in foods:
+                self.find_target_food(foods)
+
+            # Если мы можем размножаться и энергии достаточно, ищем партнера
+            if (self.reproduction_cooldown == 0 and 
+                self.energy > MIN_ENERGY_REPRODUCTION and 
+                not self.target_mate):
+                self.find_target_mate(animals)
+
+            # Если есть цель - еда и мы можем до нее добраться, идем к ней
+            if self.target_food and self.target_food in foods:
+                self.move_towards(self.target_food.x, self.target_food.y)
+                # Если достигли еды, едим ее
+                if self.distance_to(self.target_food.x, self.target_food.y) < TILE_SIZE:
+                    self.energy += ENERGY_FROM_FOOD
+                    foods.remove(self.target_food)
+                    self.target_food = None
+            # Если есть цель - партнер и мы можем размножаться, идем к нему
+            elif self.target_mate and self.target_mate in animals:
+                self.move_towards(self.target_mate.x, self.target_mate.y)
+                # Если достигли партнера, размножаемся
+                if (self.distance_to(self.target_mate.x, self.target_mate.y) < TILE_SIZE * 2 and
+                    self.gender != self.target_mate.gender and
+                    self.target_mate.reproduction_cooldown == 0 and
+                    self.target_mate.energy > MIN_ENERGY_REPRODUCTION and
+                    self.target_mate.animal_type == AnimalType.HERBIVORE):
+                    # Создаем новое животное через размножение
+                    new_animal = self.reproduce_with(self.target_mate, animals)
+                    if new_animal:
+                        animals.append(new_animal)
+                        # Сбрасываем цель
+                        self.target_mate = None
+            else:
+                # Случайное движение, если нет конкретной цели
+                self.move_randomly()
+
+        return True  # Животное живо
+
+    def find_target_food(self, foods):
+        closest_food = None
+        closest_distance = float('inf')
+
+        for food in foods:
+            distance = self.distance_to(food.x, food.y)
+            if distance < self.genome.vision and distance < closest_distance:
+                closest_food = food
+                closest_distance = distance
+
+        self.target_food = closest_food
+
+    def find_target_mate(self, animals):
+        # Только для размножения, ищем партнера противоположного пола и того же типа
+        closest_mate = None
+        closest_distance = float('inf')
+
+        for animal in animals:
+            if (animal != self and
+                animal.gender != self.gender and
+                animal.animal_type == self.animal_type and
+                animal.reproduction_cooldown == 0 and
+                animal.energy > (MIN_ENERGY_REPRODUCTION * 1.2 if self.animal_type == AnimalType.PREDATOR else MIN_ENERGY_REPRODUCTION)):
+                distance = self.distance_to(animal.x, animal.y)
+                if distance < self.genome.vision and distance < closest_distance:
+                    closest_mate = animal
+                    closest_distance = distance
+
+        self.target_mate = closest_mate
+        
+    def find_target_prey(self, animals):
+        # Только для хищников - ищем ближайшее травоядное
+        if self.animal_type != AnimalType.PREDATOR:
+            return
+            
+        closest_prey = None
+        closest_distance = float('inf')
+
+        for animal in animals:
+            if (animal != self and animal.animal_type == AnimalType.HERBIVORE):
+                distance = self.distance_to(animal.x, animal.y)
+                if distance < self.genome.vision * 1.2 and distance < closest_distance:  # Хищники видят дальше
+                    closest_prey = animal
+                    closest_distance = distance
+
+        self.target_prey = closest_prey
+
+    def move_towards(self, target_x, target_y):
+        dx = target_x - self.x
+        dy = target_y - self.y
+        distance = max(0.1, math.sqrt(dx*dx + dy*dy))
+
+        # Нормализуем вектор движения
+        dx = dx / distance
+        dy = dy / distance
+
+        # Перемещаемся с учетом скорости из генома
+        self.x += dx * self.genome.speed
+        self.y += dy * self.genome.speed
+
+        # Затрачиваем энергию на движение (зависит от скорости и расстояния)
+        self.energy -= ENERGY_COST_MOVE * self.genome.speed
+
+        # Ограничиваем перемещение границами экрана
+        self.x = max(0, min(WIDTH - TILE_SIZE, self.x))
+        self.y = max(0, min(HEIGHT - TILE_SIZE, self.y))
+
+    def move_randomly(self):
+        # Вместо полностью случайного движения, сохраняем направление движения
+        if not hasattr(self, 'direction_angle'):
+            self.direction_angle = random.uniform(0, 2 * math.pi)
+        
+        # Меняем направление на небольшой случайный угол
+        self.direction_angle += random.uniform(-0.3, 0.3)
+        
+        # Если животное приближается к краю, меняем направление от края
+        border_avoidance = 50  # Дистанция до края, на которой животное начинает отворачивать
+        
+        if self.x < border_avoidance:
+            self.direction_angle = random.uniform(-math.pi/2, math.pi/2)  # Движение вправо
+        elif self.x > WIDTH - border_avoidance:
+            self.direction_angle = random.uniform(math.pi/2, 3*math.pi/2)  # Движение влево
+        
+        if self.y < border_avoidance:
+            self.direction_angle = random.uniform(0, math.pi)  # Движение вниз
+        elif self.y > HEIGHT - border_avoidance:
+            self.direction_angle = random.uniform(math.pi, 2*math.pi)  # Движение вверх
+        
+        # Рассчитываем направление движения
+        dx = math.cos(self.direction_angle) * self.genome.speed
+        dy = math.sin(self.direction_angle) * self.genome.speed
+        
+        self.x += dx
+        self.y += dy
+        
+        # Затрачиваем энергию на движение
+        self.energy -= ENERGY_COST_MOVE * self.genome.speed * 0.4  # Ещё меньше энергии при плавном движении
+        
+        # Ограничиваем перемещение границами экрана
+        self.x = max(0, min(WIDTH - TILE_SIZE, self.x))
+        self.y = max(0, min(HEIGHT - TILE_SIZE, self.y))
+
+    def distance_to(self, target_x, target_y):
+        dx = target_x - self.x
+        dy = target_y - self.y
+        return math.sqrt(dx*dx + dy*dy)
+
+    def reproduce_with(self, partner, all_animals):
+        # Проверяем, достаточно ли энергии у женской особи и не превышен ли лимит животных
+        female = self if self.gender == Gender.FEMALE else partner
+
+        if female.energy < ENERGY_COST_BIRTH or len(all_animals) >= MAX_ANIMALS:
+            return None
+
+        # Определяем, кто из родителей прожил дольше
+        parent1, parent2 = (self, partner) if self.age >= partner.age else (partner, self)
+
+        # Создаем новый геном
+        new_genome = Genome.combine(
+            parent1.genome, 
+            parent2.genome,
+            genome1_chance=0.7,  # 70% шанс для долгоживущего родителя
+            genome2_chance=0.2,  # 20% шанс для короткоживущего родителя
+            mutation_chance=0.1  # 10% шанс мутации
+        )
+        
+        # Наследуем тип животного от родителей
+        child_type = self.animal_type
+
+        # Подсчитываем количество самцов и самок в популяции для определения пола новорожденного
+        male_count = sum(1 for a in all_animals if a.gender == Gender.MALE)
+        female_count = sum(1 for a in all_animals if a.gender == Gender.FEMALE)
+
+        # Определяем пол новорожденного на основе текущего баланса полов
+        if male_count > female_count:
+            child_gender = Gender.FEMALE  # Если самцов больше, рождается самка
+        elif female_count > male_count:
+            child_gender = Gender.MALE    # Если самок больше, рождается самец
+        else:
+            # Если равное количество, выбираем случайно
+            child_gender = random.choice([Gender.MALE, Gender.FEMALE])
+
+        # Рождение потомка рядом с родителями
+        child_x = (self.x + partner.x) / 2 + random.uniform(-20, 20)
+        child_y = (self.y + partner.y) / 2 + random.uniform(-20, 20)
+
+        # Ограничиваем положение потомка границами экрана
+        child_x = max(0, min(WIDTH - TILE_SIZE, child_x))
+        child_y = max(0, min(HEIGHT - TILE_SIZE, child_y))
+
+        # Забираем энергию у женской особи
+        female.energy -= ENERGY_COST_BIRTH
+
+        # Устанавливаем период отдыха после размножения
+        self.reproduction_cooldown = int(REPRODUCTION_COOLDOWN / self.genome.fertility)
+        partner.reproduction_cooldown = int(REPRODUCTION_COOLDOWN / partner.genome.fertility)
+
+        # Создаем нового потомка
+        return Animal(child_x, child_y, new_genome, child_gender, animal_type=child_type)
+
+    def draw(self):
+        # Для хищников - всегда красный цвет
+        if self.animal_type == AnimalType.PREDATOR:
+            color = (255, 0, 0)  # Красный цвет
+        else:
+            # Рассчитываем цвет в зависимости от возраста
+            age_ratio = min(1.0, self.age / self.max_age)
+            
+            # Для самцов: от синего к темно-синему по мере старения
+            if self.gender == Gender.MALE:
+                r = int(0)
+                g = int(max(0, 100 * (1 - age_ratio)))
+                b = int(max(100, 255 * (1 - age_ratio * 0.6)))
+                color = (r, g, b)
+            # Для самок: от розового к бордовому по мере старения
+            else:
+                r = int(max(150, 255 * (1 - age_ratio * 0.4)))
+                g = int(max(0, 100 * (1 - age_ratio)))
+                b = int(max(100, 255 * (1 - age_ratio * 0.6)))
+                color = (r, g, b)
+        
+        # Рисуем животное как прямоугольник
+        pygame.draw.rect(screen, color, (int(self.x), int(self.y), TILE_SIZE, TILE_SIZE))
+
+        # Добавляем индикатор энергии
+        energy_height = max(1, int(self.energy / 100 * TILE_SIZE))
+        energy_color = (255, 255, 0)  # Желтый для индикатора энергии
+        pygame.draw.rect(screen, energy_color, (int(self.x) - 3, int(self.y) + TILE_SIZE - energy_height, 2, energy_height))
+        
+        # Добавляем индикатор возраста только для травоядных
+        if self.animal_type == AnimalType.HERBIVORE:
+            age_ratio = min(1.0, self.age / self.max_age)
+            age_height = max(1, int(age_ratio * TILE_SIZE))
+            age_color = (255, 0, 0)  # Красный для индикатора возраста
+            pygame.draw.rect(screen, age_color, (int(self.x) + TILE_SIZE + 1, int(self.y) + TILE_SIZE - age_height, 2, age_height))
+
+# Класс для еды
+class Food:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def draw(self):
+        pygame.draw.rect(screen, FOOD_COLOR, (int(self.x), int(self.y), TILE_SIZE, TILE_SIZE))
+
+# Функция для отображения статистики
+def draw_stats(animals, foods, elapsed_time=0):
+    if not animals:
+        return
+
+    # Подсчитываем статистику
+    male_count = sum(1 for a in animals if a.gender == Gender.MALE)
+    female_count = sum(1 for a in animals if a.gender == Gender.FEMALE)
+    herbivore_count = sum(1 for a in animals if a.animal_type == AnimalType.HERBIVORE)
+    predator_count = sum(1 for a in animals if a.animal_type == AnimalType.PREDATOR)
+    total_count = len(animals)
+
+    avg_speed = sum(a.genome.speed for a in animals) / total_count if total_count > 0 else 0
+    avg_metabolism = sum(a.genome.metabolism for a in animals) / total_count if total_count > 0 else 0
+    avg_vision = sum(a.genome.vision for a in animals) / total_count if total_count > 0 else 0
+    avg_fertility = sum(a.genome.fertility for a in animals) / total_count if total_count > 0 else 0
+    avg_age = sum(a.age for a in animals) / total_count if total_count > 0 else 0
+    avg_age_seconds = avg_age / FPS if total_count > 0 else 0
+
+    # Форматирование времени
+    seconds = int(elapsed_time / 1000) % 60
+    minutes = int(elapsed_time / 60000) % 60
+    hours = int(elapsed_time / 3600000)
+    time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    # Определяем наличие хищника
+    predator_status = "есть" if predator_count > 0 else "нет"
+    
+    # Отображаем статистику
+    stats = [
+        f"Время: {time_str}",
+        f"Популяция: {herbivore_count}/{MAX_ANIMALS} (♂:{male_count} ♀:{female_count})",
+        f"Травоядные: {herbivore_count}, Хищник: {predator_status}",
+        f"Еда: {len(foods)}",
+        f"Средний возраст: {avg_age_seconds:.1f} сек",
+        f"Скорость: {avg_speed:.2f}",
+        f"Метаболизм: {avg_metabolism:.2f}",
+        f"Поле зрения: {avg_vision:.2f}",
+        f"Плодовитость: {avg_fertility:.2f}",
+    ]
+
+    for i, stat in enumerate(stats):
+        # Изменение цвета текста популяции при приближении к лимиту
+        if i == 1 and total_count > MAX_ANIMALS * 0.8:  # Если популяция > 80% от максимума
+            text_color = (255, 100, 100)  # Красноватый цвет для предупреждения
+        else:
+            text_color = FONT_COLOR
+        
+        text = font.render(stat, True, text_color)
+        screen.blit(text, (10, 10 + i * 25))
+
+# Основная игровая функция
+def main():
+    animals = []
+    foods = []
+    
+    # Счётчики времени
+    start_time = pygame.time.get_ticks()
+    elapsed_time = 0
+    paused_time = 0
+    pause_start = 0
+    
+    # Флаг для отслеживания появления хищников
+    predator_spawned = False
+
+    # Создаем начальных животных (только травоядных)
+    for _ in range(INITIAL_ANIMALS):
+        x = random.randint(0, WIDTH - TILE_SIZE)
+        y = random.randint(0, HEIGHT - TILE_SIZE)
+        gender = random.choice([Gender.MALE, Gender.FEMALE])
+        animals.append(Animal(x, y, gender=gender, animal_type=AnimalType.HERBIVORE))
+
+    # Создаем начальную еду
+    for _ in range(INITIAL_FOOD):
+        x = random.randint(0, WIDTH - TILE_SIZE)
+        y = random.randint(0, HEIGHT - TILE_SIZE)
+        foods.append(Food(x, y))
+
+    running = True
+    paused = False
+
+    while running:
+        # Обработка событий
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    if paused:
+                        # Возобновление - учитываем время, проведённое на паузе
+                        paused_time += pygame.time.get_ticks() - pause_start
+                        paused = False
+                    else:
+                        # Постановка на паузу - запоминаем время начала паузы
+                        pause_start = pygame.time.get_ticks()
+                        paused = True
+                elif event.key == pygame.K_f:
+                    # Добавление еды по клавише F
+                    x, y = pygame.mouse.get_pos()
+                    foods.append(Food(x, y))
+                elif event.key == pygame.K_a:
+                    # Добавление животного по клавише A
+                    x, y = pygame.mouse.get_pos()
+                    gender = random.choice([Gender.MALE, Gender.FEMALE])
+                    animals.append(Animal(x, y, gender=gender))
+
+        if not paused:
+            # Подсчитываем количество травоядных
+            herbivore_count = sum(1 for a in animals if a.animal_type == AnimalType.HERBIVORE)
+            predator_count = sum(1 for a in animals if a.animal_type == AnimalType.PREDATOR)
+            
+            # Проверяем условия для создания хищника
+            if herbivore_count >= 80 and predator_count == 0 and not predator_spawned:
+                # Создаем хищника
+                x = random.randint(0, WIDTH - TILE_SIZE)
+                y = random.randint(0, HEIGHT - TILE_SIZE)
+                gender = random.choice([Gender.MALE, Gender.FEMALE])
+                predator = Animal(x, y, gender=gender, animal_type=AnimalType.PREDATOR)
+                predator.energy = 100  # Даем начальную энергию
+                animals.append(predator)
+                predator_spawned = True
+                
+            # Если все хищники исчезли, сбрасываем флаг
+            if predator_count == 0:
+                predator_spawned = False
+                
+            # Обновляем всех животных
+            for animal in animals[:]:
+                if not animal.update(foods, animals):
+                    animals.remove(animal)
+
+            # Спавним новую еду с определенной вероятностью
+            if random.random() < FOOD_SPAWN_RATE and len(foods) < MAX_FOOD:
+                x = random.randint(0, WIDTH - TILE_SIZE)
+                y = random.randint(0, HEIGHT - TILE_SIZE)
+                foods.append(Food(x, y))
+
+        # Отрисовка
+        screen.fill(BG_COLOR)
+
+        # Рисуем еду
+        for food in foods:
+            food.draw()
+
+        # Рисуем животных
+        for animal in animals:
+            animal.draw()
+
+        # Рассчитываем прошедшее время
+        if not paused:
+            elapsed_time = pygame.time.get_ticks() - start_time - paused_time
+        
+        # Отображаем статистику
+        draw_stats(animals, foods, elapsed_time)
+
+        # Отображаем подсказки по управлению
+        controls = [
+            "Пробел - пауза",
+            "F - добавить еду",
+            "A - добавить животное"
+        ]
+
+        for i, control in enumerate(controls):
+            text = font.render(control, True, FONT_COLOR)
+            screen.blit(text, (WIDTH - 200, 10 + i * 25))
+
+        # Обновляем экран
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
