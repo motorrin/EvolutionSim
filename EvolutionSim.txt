@@ -126,7 +126,7 @@ class Animal:
             self.color = (255, 0, 0)  # Красный цвет для хищника
             # Увеличиваем скорость для хищника
             if self.genome:
-                self.genome.speed *= 1.35  # Хищник на 35% быстрее
+                self.genome.speed *= 1.75  # Хищник на 75% быстрее
         else:
             self.color = MALE_COLOR if self.gender == Gender.MALE else FEMALE_COLOR
             
