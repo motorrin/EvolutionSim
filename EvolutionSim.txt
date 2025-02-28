@@ -19,17 +19,19 @@ MIN_LIFESPAN = 60 * FPS  # 1 минута (в кадрах)
 MAX_LIFESPAN = 180 * FPS  # 3 минуты (в кадрах)
 
 # Параметры игры
-INITIAL_ANIMALS = 15  # Увеличено начальное количество животных
-INITIAL_FOOD = 60  # Увеличено начальное количество еды
-FOOD_SPAWN_RATE = 0.32  # Сбалансированная вероятность появления еды
-MAX_FOOD = 100  # Оптимизировано максимальное количество еды
+INITIAL_ANIMALS = 20  # Увеличено начальное количество животных
+INITIAL_FOOD = 80  # Увеличено начальное количество еды
+FOOD_SPAWN_RATE = 0.4  # Повышена вероятность появления еды
+MAX_FOOD = 130  # Увеличено максимальное количество еды
 MAX_ANIMALS = 100  # Максимальное количество травоядных
-ENERGY_FROM_FOOD = 35  # Увеличена энергия от еды для баланса с высокой скоростью
-ENERGY_COST_BIRTH = 30  # Увеличена энергия на рождение для баланса популяции
-ENERGY_COST_MOVE = 0.2  # Увеличена энергия за движение (с учетом высокой скорости)
-ENERGY_COST_EXIST = 0.1  # Увеличен базовый расход энергии
-REPRODUCTION_COOLDOWN = 300  # Сбалансирован перерыв между размножениями
-MIN_ENERGY_REPRODUCTION = 70  # Увеличена минимальная энергия для размножения
+ENERGY_FROM_FOOD = 40  # Увеличена энергия от еды
+ENERGY_COST_BIRTH = 25  # Снижена энергия на рождение для стимуляции размножения
+ENERGY_COST_MOVE = 0.15  # Снижена энергия за движение
+ENERGY_COST_EXIST = 0.08  # Снижен базовый расход энергии
+REPRODUCTION_COOLDOWN = 250  # Уменьшен перерыв между размножениями
+MIN_ENERGY_REPRODUCTION = 60  # Снижена минимальная энергия для размножения
+MIN_POPULATION_THRESHOLD = 10  # Минимальное количество травоядных перед восстановлением
+RESPAWN_COUNT = 5  # Количество особей для автоматического восстановления
 
 # Ограничения параметров животных
 MIN_SPEED = 0.8  # Минимальная скорость
@@ -122,6 +124,9 @@ class Animal:
         # Определяем цвет в зависимости от типа и пола
         if self.animal_type == AnimalType.PREDATOR:
             self.color = (255, 0, 0)  # Красный цвет для хищника
+            # Увеличиваем скорость для хищника
+            if self.genome:
+                self.genome.speed *= 1.35  # Хищник на 35% быстрее
         else:
             self.color = MALE_COLOR if self.gender == Gender.MALE else FEMALE_COLOR
             
@@ -162,6 +167,10 @@ class Animal:
                 not self.target_mate):
                 self.find_target_mate(animals)
 
+            # Регулярно переключаемся на новую ближайшую цель вместо преследования одной
+            if random.random() < 0.05:  # 5% шанс на каждом кадре переоценить цель
+                self.find_target_prey(animals)
+                
             # Если есть цель - жертва, идем к ней
             if self.target_prey and self.target_prey in animals and self.target_prey.animal_type == AnimalType.HERBIVORE:
                 self.move_towards(self.target_prey.x, self.target_prey.y)
@@ -270,7 +279,7 @@ class Animal:
         for animal in animals:
             if (animal != self and animal.animal_type == AnimalType.HERBIVORE):
                 distance = self.distance_to(animal.x, animal.y)
-                if distance < self.genome.vision * 1.2 and distance < closest_distance:  # Хищники видят дальше
+                if distance < self.genome.vision * 1.5 and distance < closest_distance:  # Хищники видят ещё дальше
                     closest_prey = animal
                     closest_distance = distance
 
@@ -550,7 +559,7 @@ def main():
             predator_count = sum(1 for a in animals if a.animal_type == AnimalType.PREDATOR)
             
             # Проверяем условия для создания хищника
-            if herbivore_count >= 80 and predator_count == 0 and not predator_spawned:
+            if herbivore_count >= 70 and predator_count == 0 and not predator_spawned:
                 # Создаем хищника
                 x = random.randint(0, WIDTH - TILE_SIZE)
                 y = random.randint(0, HEIGHT - TILE_SIZE)
@@ -563,6 +572,24 @@ def main():
             # Если все хищники исчезли, сбрасываем флаг
             if predator_count == 0:
                 predator_spawned = False
+                
+            # Проверяем необходимость восстановления популяции
+            if herbivore_count < MIN_POPULATION_THRESHOLD:
+                # Добавляем новых особей для восстановления популяции
+                for _ in range(RESPAWN_COUNT):
+                    x = random.randint(0, WIDTH - TILE_SIZE)
+                    y = random.randint(0, HEIGHT - TILE_SIZE)
+                    gender = random.choice([Gender.MALE, Gender.FEMALE])
+                    # Создаем животное с улучшенными параметрами для быстрого восстановления
+                    new_genome = Genome(
+                        speed=random.uniform(MIN_SPEED * 1.2, MAX_SPEED * 0.8),
+                        metabolism=random.uniform(MIN_METABOLISM, MIN_METABOLISM * 1.5),
+                        vision=random.uniform(MIN_VISION * 1.5, MAX_VISION * 0.8),
+                        fertility=random.uniform(MAX_FERTILITY * 0.7, MAX_FERTILITY)
+                    )
+                    new_animal = Animal(x, y, genome=new_genome, gender=gender, animal_type=AnimalType.HERBIVORE)
+                    new_animal.energy = 100  # Даем полную энергию
+                    animals.append(new_animal)
                 
             # Обновляем всех животных
             for animal in animals[:]:
