@@ -124,9 +124,9 @@ class Animal:
         # Определяем цвет в зависимости от типа и пола
         if self.animal_type == AnimalType.PREDATOR:
             self.color = (255, 0, 0)  # Красный цвет для хищника
-            # Увеличиваем скорость для хищника
+            # Базовая скорость хищника, будет динамически меняться при охоте
             if self.genome:
-                self.genome.speed *= 1.75  # Хищник на 75% быстрее
+                self.base_speed = self.genome.speed  # Сохраняем базовую скорость
         else:
             self.color = MALE_COLOR if self.gender == Gender.MALE else FEMALE_COLOR
             
@@ -173,6 +173,8 @@ class Animal:
                 
             # Если есть цель - жертва, идем к ней
             if self.target_prey and self.target_prey in animals and self.target_prey.animal_type == AnimalType.HERBIVORE:
+                # Обновляем скорость хищника в зависимости от скорости жертвы
+                self.genome.speed = self.target_prey.genome.speed + 1.0
                 self.move_towards(self.target_prey.x, self.target_prey.y)
                 # Если достигли жертвы, едим ее
                 if self.distance_to(self.target_prey.x, self.target_prey.y) < TILE_SIZE * 1.5:
@@ -195,6 +197,9 @@ class Animal:
                         animals.append(new_animal)
                         self.target_mate = None
             else:
+                # Возвращаем базовую скорость, когда нет цели
+                if hasattr(self, 'base_speed'):
+                    self.genome.speed = self.base_speed
                 # Случайное движение, если нет цели
                 self.move_randomly()
         # Логика для травоядных
